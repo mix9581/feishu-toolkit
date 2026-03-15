@@ -287,6 +287,124 @@ class FeishuClient:
             "url": f"https://feishu.cn/docx/{doc_id}",
         }
 
+    # ━━ Wiki (知识库) Operations ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def list_wiki_spaces(self, page_size: int = 50) -> list[dict]:
+        """
+        获取有权限访问的知识空间列表。
+        应用需先被添加为知识空间成员/管理员，否则返回空列表。
+        """
+        data = self._request("GET", f"/wiki/v2/spaces?page_size={page_size}")
+        return data.get("data", {}).get("items", [])
+
+    def get_wiki_node(self, node_token: str) -> dict:
+        """
+        通过 node_token 获取节点信息（含实际 obj_token）。
+
+        飞书 Wiki URL 中的 token 是 node_token，调用文档 API 需要 obj_token。
+        例: URL https://xxx.feishu.cn/wiki/EpMmw... 中 EpMmw... 是 node_token。
+        返回字段包括: node_token, obj_token, obj_type, title 等。
+        """
+        data = self._request("GET", f"/wiki/v2/spaces/get_node?token={node_token}")
+        return data.get("data", {}).get("node", {})
+
+    def move_doc_to_wiki(self, space_id: str, obj_token: str, obj_type: str = "docx",
+                         parent_wiki_token: str = None, apply: bool = False) -> dict:
+        """
+        将云空间文档移动到知识库（异步接口）。
+
+        Args:
+            space_id: 目标知识空间 ID（通过 list_wiki_spaces 获取）
+            obj_token: 文档 token（即 document_id）
+            obj_type: 文档类型，docx/doc/sheet/bitable/file/slides 等
+            parent_wiki_token: 挂载的父节点 wiki_token，不传则为知识空间一级节点
+            apply: 无权限时是否发起申请（需审批后自动移动）
+
+        Returns:
+            含 wiki_token（已完成）或 task_id（进行中）的 dict
+        """
+        body: dict = {"obj_token": obj_token, "obj_type": obj_type}
+        if parent_wiki_token:
+            body["parent_wiki_token"] = parent_wiki_token
+        if apply:
+            body["apply"] = apply
+        data = self._request(
+            "POST",
+            f"/wiki/v2/spaces/{space_id}/nodes/move_docs_to_wiki",
+            json=body,
+        )
+        return data.get("data", {})
+
+    def get_wiki_task_result(self, task_id: str) -> dict:
+        """获取知识库异步任务结果（配合 move_doc_to_wiki 使用）"""
+        data = self._request("GET", f"/wiki/v2/tasks/{task_id}?task_type=move")
+        return data.get("data", {}).get("task", {})
+
+    def create_document_in_wiki(self, space_id: str, title: str,
+                                blocks: list[dict] = None,
+                                parent_wiki_token: str = None) -> dict:
+        """
+        在知识库中创建文档并写入内容（一步到位）。
+
+        流程: 云空间创建 docx → 写入 blocks → 异步移动到知识库 → 等待完成
+        注意: 应用需已被添加为目标知识空间成员（list_wiki_spaces 返回非空即可）
+
+        Args:
+            space_id: 目标知识空间 ID
+            title: 文档标题
+            blocks: 文档块列表，使用 heading_block/text_block/bullet_block 等构建
+            parent_wiki_token: 挂载父节点 wiki_token，不传则为知识空间一级节点
+
+        Returns:
+            {"wiki_token": "...", "obj_token": "...", "url": "https://feishu.cn/wiki/..."}
+
+        Example:
+            result = client.create_document_in_wiki(
+                space_id="7034502641455497244",
+                title="周报: 音乐数据分析",
+                blocks=[
+                    client.heading_block("概览", level=1),
+                    client.text_block("本周各平台数据表现良好。"),
+                    client.bullet_block("QQ音乐: 播放量 120万"),
+                ],
+            )
+            print(f"文档已创建: {result['url']}")
+        """
+        # Step 1: 在云空间创建 docx
+        doc = self.create_document(title)
+        doc_id = doc["document_id"]
+
+        # Step 2: 写入内容
+        if blocks:
+            root_block = self.get_document_root_block(doc_id)
+            self.add_document_blocks(doc_id, root_block, blocks)
+
+        # Step 3: 移动到知识库
+        result = self.move_doc_to_wiki(space_id, doc_id, "docx", parent_wiki_token)
+        wiki_token = result.get("wiki_token")
+        task_id = result.get("task_id")
+
+        # Step 4: 如果是异步任务，轮询等待（最多 15 秒）
+        if task_id and not wiki_token:
+            for _ in range(15):
+                time.sleep(1)
+                task = self.get_wiki_task_result(task_id)
+                move_results = task.get("move_result", [])
+                if move_results:
+                    status = move_results[0].get("status")
+                    if status == 0:
+                        wiki_token = move_results[0].get("node", {}).get("node_token")
+                        break
+                    elif status == -1:
+                        status_msg = move_results[0].get("status_msg", "unknown error")
+                        raise FeishuAPIError(-1, f"Move to wiki failed: {status_msg}")
+
+        return {
+            "wiki_token": wiki_token,
+            "obj_token": doc_id,
+            "url": f"https://feishu.cn/wiki/{wiki_token}" if wiki_token else None,
+        }
+
     # ━━ Document Block Builders ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     @staticmethod
@@ -487,6 +605,14 @@ def main():
     p.add_argument("title", help="文档标题")
     p.add_argument("--folder", help="目标文件夹 token", default=None)
 
+    sub.add_parser("list-wikis", help="列出有权限的知识空间")
+
+    p = sub.add_parser("create-wiki-doc", help="在知识库中创建文档（自动移动到知识空间）")
+    p.add_argument("title", help="文档标题")
+    p.add_argument("--space-id", required=True, dest="space_id", help="知识空间 ID（用 list-wikis 获取）")
+    p.add_argument("--parent", default=None, dest="parent_wiki_token",
+                   help="父节点 wiki_token，不传则为知识空间一级节点")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -540,6 +666,24 @@ def main():
             doc_id = doc["document_id"]
             print(f"Document created: {doc_id}")
             print(f"URL: https://feishu.cn/docx/{doc_id}")
+
+        elif args.command == "list-wikis":
+            spaces = client.list_wiki_spaces()
+            if not spaces:
+                print("No wiki spaces found.")
+                print("Make sure the app is added as wiki member/admin.")
+            for s in spaces:
+                print(f"  {s.get('space_id')}  |  {s.get('name', 'N/A')}  |  {s.get('space_type', 'N/A')}")
+
+        elif args.command == "create-wiki-doc":
+            result = client.create_document_in_wiki(
+                args.space_id, args.title,
+                parent_wiki_token=args.parent_wiki_token,
+            )
+            print(f"Document created in wiki!")
+            print(f"  wiki_token: {result['wiki_token']}")
+            print(f"  obj_token:  {result['obj_token']}")
+            print(f"  URL: {result['url']}")
 
     except FeishuAPIError as e:
         print(f"Feishu API Error: {e}", file=sys.stderr)
