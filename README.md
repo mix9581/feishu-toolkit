@@ -9,6 +9,7 @@
   <a href="#features">功能</a> ·
   <a href="#quick-start">快速开始</a> ·
   <a href="#usage">使用指南</a> ·
+  <a href="#cards">卡片消息</a> ·
   <a href="#wiki">知识库</a> ·
   <a href="#ai-agent">AI Agent 集成</a> ·
   <a href="#api">API 参考</a>
@@ -128,24 +129,6 @@ image_key = client.upload_image("./chart.png")
 client.send_image("oc_xxx", image_key)
 ```
 
-#### 发送交互卡片
-
-```python
-card = client.build_card("数据告警", [
-    client.card_markdown("**播放量异常下降**"),
-    client.card_fields([
-        ("**歌曲**: 星晴", True),
-        ("**平台**: QQ音乐", True),
-        ("**当前值**: 12,345", True),
-        ("**基线值**: 45,678", True),
-    ]),
-    client.card_divider(),
-    client.card_button("查看详情", "https://dashboard.example.com"),
-], color="red")
-
-client.send_card("oc_xxx", card)
-```
-
 #### 创建飞书文档（云空间）
 
 ```python
@@ -182,6 +165,155 @@ python feishu_toolkit.py get-user-id --email user@company.com
 python feishu_toolkit.py create-doc "文档标题"
 python feishu_toolkit.py list-wikis
 python feishu_toolkit.py create-wiki-doc "文档标题" --space-id <space_id>
+```
+
+<h2 id="cards">卡片消息（Card Builder）</h2>
+
+飞书交互卡片支持多种组件，Toolkit 提供了完整的 Builder API，无需手写 JSON。
+
+### 基础卡片
+
+```python
+card = client.build_card("告警标题", [
+    client.card_markdown("**播放量异常下降**，请及时处理"),
+    client.card_divider(),
+    client.card_button("查看详情", "https://example.com"),
+], color="red")
+
+client.send_card("oc_xxx", card)
+```
+
+颜色值：`blue`（默认）、`green`、`red`、`yellow`、`grey`、`orange`、`purple`、`turquoise`、`indigo`
+
+### 带副标题的卡片
+
+```python
+card = client.build_card(
+    title="数据周报",
+    elements=[...],
+    subtitle="2024-W12 · 音乐平台数据",
+    color="blue",
+)
+```
+
+### 字段列表（card_fields）
+
+```python
+client.card_fields([
+    ("**歌曲**: 星晴", True),      # True = 宽格式（独占一行）
+    ("**平台**: QQ音乐", True),
+    ("**播放量**: 120,000", False), # False = 窄格式（左右两列）
+    ("**评论数**: 3,500", False),
+])
+```
+
+### 图片（card_image）
+
+```python
+image_key = client.upload_image("./chart.png")
+
+client.card_image(image_key, alt="播放量趋势图", mode="fit_horizontal")
+# mode: "fit_horizontal"（自适应宽度）| "crop_center"（居中裁剪）
+```
+
+### 多按钮行（card_action + card_btn）
+
+```python
+# 单按钮（旧 API，保持兼容）
+client.card_button("查看详情", "https://example.com", button_type="primary")
+
+# 多按钮（新 API，横向排列）
+client.card_action(
+    client.card_btn("确认",    url=None,                  btn_type="primary"),
+    client.card_btn("查看",    url="https://example.com", btn_type="default"),
+    client.card_btn("忽略",    url=None,                  btn_type="danger",
+                    confirm=("确认忽略?", "此操作不可撤销")),
+)
+```
+
+`btn_type`：`default` | `primary` | `danger`
+
+`confirm=(title, text)` 点击时弹出确认对话框。
+
+### 多列布局（card_column_set）
+
+```python
+client.card_column_set(
+    client.card_column([
+        client.card_markdown("**左列**\n今日播放量\n`1,234,567`"),
+    ], weight=1),
+    client.card_column([
+        client.card_markdown("**右列**\n环比增长\n`+23.5%`"),
+    ], weight=1),
+    flex_mode="none",  # "none" | "stretch" | "flow" | "bisect" | "trisect"
+)
+```
+
+### 备注行（card_note）
+
+```python
+client.card_note(
+    client.note_img(image_key, alt="logo"),
+    client.note_md("数据来源: 内部 BI 平台 · 更新时间: 2024-03-15 10:00"),
+)
+```
+
+### 完整示例：数据告警卡片
+
+```python
+image_key = client.upload_image("./trend_chart.png")
+
+card = client.build_card(
+    title="播放量异常告警",
+    subtitle="QQ音乐 · 星晴",
+    elements=[
+        client.card_markdown(
+            f"检测到播放量 {client.md_color('显著下降', 'red')}，"
+            f"当前值 {client.md_bold('12,345')} 低于基线 45,678"
+        ),
+        client.card_fields([
+            ("**歌曲**: 星晴",          True),
+            ("**平台**: QQ音乐",        True),
+            ("**当前播放量**: 12,345",  False),
+            ("**基线播放量**: 45,678",  False),
+            ("**下降幅度**: -73%",      False),
+            ("**告警等级**: P1",        False),
+        ]),
+        client.card_image(image_key, alt="播放量趋势图"),
+        client.card_divider(),
+        client.card_action(
+            client.card_btn("立即处理", url="https://dashboard.example.com", btn_type="primary"),
+            client.card_btn("忽略",     btn_type="danger",
+                            confirm=("确认忽略?", "将不再收到此告警的通知")),
+        ),
+        client.card_note(
+            client.note_md(f"自动告警 · {client.md_link('查看告警规则', 'https://example.com/rules')}"),
+        ),
+    ],
+    color="red",
+)
+
+client.send_card("oc_xxx", card)
+```
+
+### Markdown 字符串助手（`md_*`）
+
+卡片 markdown 内容支持 lark_md 语法，Toolkit 提供了一组助手方法：
+
+```python
+client.md_bold("加粗文字")          # **加粗文字**
+client.md_italic("斜体文字")        # *斜体文字*
+client.md_strike("删除线")          # ~~删除线~~
+client.md_color("红色文字", "red")  # <font color='red'>红色文字</font>
+                                    # 颜色: red/orange/yellow/green/blue/purple/grey/default
+client.md_tag("标签", "blue")       # <text_tag color='blue'>标签</text_tag>
+client.md_at("ou_xxx")              # <at id=ou_xxx></at>
+client.md_at_all()                  # <at id=all></at>
+client.md_link("链接文字", "https://example.com")  # [链接文字](https://example.com)
+client.md_code_inline("code")       # `code`
+client.md_code_block("print('hi')", lang="python")  # ```python\n...\n```
+client.md_header("标题", level=1)   # # 标题
+client.md_hr()                      # ---
 ```
 
 <h2 id="wiki">知识库（Wiki）使用指南</h2>
@@ -331,6 +463,41 @@ cp -r skill/ ~/.cursor/skills/feishu-integration/
 | `create_bitable_records(app, table, records)` | 批量创建记录 |
 | `search_bitable_records(app, table, filter)` | 搜索记录 |
 
+### 卡片 Builder
+
+| 方法 | 说明 |
+|------|------|
+| `build_card(title, elements, color, subtitle)` | 构建卡片 JSON |
+| `card_markdown(content)` | Markdown 文本块 |
+| `card_fields(fields)` | 字段列表（键值对展示） |
+| `card_image(image_key, alt, mode)` | 图片块 |
+| `card_button(text, url, button_type)` | 单按钮（兼容旧接口） |
+| `card_action(*buttons)` | 多按钮横向排列 |
+| `card_btn(text, url, btn_type, value, confirm)` | 构建单个按钮（供 card_action 使用） |
+| `card_column_set(*columns, flex_mode)` | 多列布局容器 |
+| `card_column(elements, width, weight)` | 列（供 card_column_set 使用） |
+| `card_note(*elements)` | 备注行 |
+| `note_md(content)` | 备注中的 Markdown 元素 |
+| `note_img(image_key, alt)` | 备注中的图片元素 |
+| `card_divider()` | 分割线 |
+
+### Markdown 助手（`md_*`）
+
+| 方法 | 输出示例 |
+|------|----------|
+| `md_bold(text)` | `**text**` |
+| `md_italic(text)` | `*text*` |
+| `md_strike(text)` | `~~text~~` |
+| `md_color(text, color)` | `<font color='red'>text</font>` |
+| `md_tag(text, color)` | `<text_tag color='blue'>text</text_tag>` |
+| `md_at(user_id)` | `<at id=ou_xxx></at>` |
+| `md_at_all()` | `<at id=all></at>` |
+| `md_link(text, url)` | `[text](url)` |
+| `md_code_inline(code)` | `` `code` `` |
+| `md_code_block(code, lang)` | ` ```python\n...\n``` ` |
+| `md_header(text, level)` | `# text` |
+| `md_hr()` | `---` |
+
 ## 环境要求
 
 - Python >= 3.9
@@ -339,4 +506,3 @@ cp -r skill/ ~/.cursor/skills/feishu-integration/
 ## License
 
 [MIT](LICENSE)
-
