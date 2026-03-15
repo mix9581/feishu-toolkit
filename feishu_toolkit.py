@@ -477,30 +477,36 @@ class FeishuClient:
     # ━━ Card Builders ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     @staticmethod
-    def build_card(title: str, elements: list[dict], color: str = "blue") -> dict:
+    def build_card(title: str, elements: list[dict], color: str = "blue",
+                   subtitle: str = None) -> dict:
         """
         构建交互卡片。
         color: blue/green/red/orange/purple/indigo/grey/turquoise/violet/wathet/yellow
+        subtitle: 标题栏副标题（可选）
         """
+        header: dict = {
+            "title": {"content": title, "tag": "plain_text"},
+            "template": color,
+        }
+        if subtitle:
+            header["subtitle"] = {"content": subtitle, "tag": "plain_text"}
         return {
             "config": {"wide_screen_mode": True},
-            "header": {
-                "title": {"content": title, "tag": "plain_text"},
-                "template": color,
-            },
+            "header": header,
             "elements": elements,
         }
 
     @staticmethod
     def card_markdown(content: str) -> dict:
-        """卡片 Markdown 内容块"""
+        """卡片富文本块（lark_md 格式，支持加粗/颜色/表格/标题等语法）"""
         return {"tag": "div", "text": {"content": content, "tag": "lark_md"}}
 
     @staticmethod
     def card_fields(fields: list[tuple[str, bool]]) -> dict:
         """
-        卡片字段列表。
+        卡片双列字段布局。
         fields: [(markdown_content, is_short), ...]
+        is_short=True 的相邻字段会并排显示（半列宽），False 则独占整行。
         """
         return {
             "tag": "div",
@@ -511,7 +517,23 @@ class FeishuClient:
         }
 
     @staticmethod
+    def card_image(image_key: str, alt: str = "",
+                   mode: str = "fit_horizontal") -> dict:
+        """
+        卡片图片块。
+        mode: fit_horizontal（适应宽度）/ crop_center（居中裁剪）/ top_cropped（顶部）
+        image_key 通过 upload_image() 获取。
+        """
+        return {
+            "tag": "img",
+            "img_key": image_key,
+            "alt": {"tag": "plain_text", "content": alt},
+            "mode": mode,
+        }
+
+    @staticmethod
     def card_button(text: str, url: str, button_type: str = "primary") -> dict:
+        """单按钮（独占一行）。button_type: primary / default / danger"""
         return {
             "tag": "action",
             "actions": [{
@@ -523,8 +545,179 @@ class FeishuClient:
         }
 
     @staticmethod
+    def card_action(*buttons: dict) -> dict:
+        """
+        多按钮横向排列（共用一行）。每个按钮用 card_btn() 构建。
+
+        Example:
+            client.card_action(
+                client.card_btn("确认", url="https://...", btn_type="primary"),
+                client.card_btn("取消", btn_type="default"),
+                client.card_btn("删除", btn_type="danger",
+                                confirm=("确认删除", "此操作不可恢复")),
+            )
+        """
+        return {"tag": "action", "actions": list(buttons)}
+
+    @staticmethod
+    def card_btn(text: str, url: str = None, btn_type: str = "default",
+                 value: dict = None, confirm: tuple = None) -> dict:
+        """
+        构建按钮对象，用于 card_action()。
+
+        Args:
+            text: 按钮文字
+            url: 点击跳转链接
+            btn_type: primary / default / danger
+            value: 回调值 dict（不传 url 时用于回传数据）
+            confirm: 二次确认弹窗 (title, content)
+        """
+        btn: dict = {
+            "tag": "button",
+            "text": {"content": text, "tag": "plain_text"},
+            "type": btn_type,
+        }
+        if url:
+            btn["url"] = url
+        if value:
+            btn["value"] = value
+        if confirm:
+            btn["confirm"] = {
+                "title": {"content": confirm[0], "tag": "plain_text"},
+                "text": {"content": confirm[1], "tag": "plain_text"},
+            }
+        return btn
+
+    @staticmethod
+    def card_column_set(*columns: dict, flex_mode: str = "none") -> dict:
+        """
+        多列布局容器。每列用 card_column() 构建。
+        flex_mode: none / stretch / flow / bisect / trisect
+
+        Example:
+            client.card_column_set(
+                client.card_column([client.card_markdown("**左列**\\n内容 A")], weight=1),
+                client.card_column([client.card_markdown("**右列**\\n内容 B")], weight=1),
+            )
+        """
+        return {
+            "tag": "column_set",
+            "flex_mode": flex_mode,
+            "columns": list(columns),
+        }
+
+    @staticmethod
+    def card_column(elements: list[dict], width: str = "weighted",
+                    weight: int = 1) -> dict:
+        """
+        列布局中的单列。
+        width: weighted（按权重）/ auto（自适应内容）
+        weight: 相对宽度权重，width=weighted 时生效
+        """
+        return {
+            "tag": "column",
+            "width": width,
+            "weight": weight,
+            "elements": elements,
+        }
+
+    @staticmethod
+    def card_note(*elements: dict) -> dict:
+        """
+        备注块（小号灰色，常用于卡片底部来源说明）。
+        elements 使用 note_md() 或 note_img() 构建。
+
+        Example:
+            client.card_note(
+                client.note_md("更新于 2024-01-01 · 数据来源: 监控系统")
+            )
+        """
+        return {"tag": "note", "elements": list(elements)}
+
+    @staticmethod
+    def note_md(content: str) -> dict:
+        """备注块内的文本元素（配合 card_note 使用）"""
+        return {"tag": "lark_md", "content": content}
+
+    @staticmethod
+    def note_img(image_key: str, alt: str = "") -> dict:
+        """备注块内的图片元素（配合 card_note 使用）"""
+        return {"tag": "img", "img_key": image_key,
+                "alt": {"tag": "plain_text", "content": alt}}
+
+    @staticmethod
     def card_divider() -> dict:
+        """分割线"""
         return {"tag": "hr"}
+
+    # ━━ Card Markdown 富文本语法助手 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 返回字符串片段，拼接后传入 card_markdown() 使用
+
+    @staticmethod
+    def md_bold(text: str) -> str:
+        """加粗 **text**"""
+        return f"**{text}**"
+
+    @staticmethod
+    def md_italic(text: str) -> str:
+        """斜体 *text*"""
+        return f"*{text}*"
+
+    @staticmethod
+    def md_strike(text: str) -> str:
+        """删除线 ~~text~~"""
+        return f"~~{text}~~"
+
+    @staticmethod
+    def md_color(text: str, color: str = "red") -> str:
+        """
+        彩色文本。
+        color: red/green/blue/grey/orange/purple/indigo/turquoise/wathet/yellow/lime/carmine/violet
+        """
+        return f"<font color='{color}'>{text}</font>"
+
+    @staticmethod
+    def md_tag(text: str, color: str = "blue") -> str:
+        """
+        文字标签（彩色圆角胶囊）。
+        color: neutral/blue/turquoise/lime/orange/violet/indigo/wathet/green/yellow/red/purple/carmine
+        """
+        return f"<text_tag color='{color}'>{text}</text_tag>"
+
+    @staticmethod
+    def md_at(user_id: str) -> str:
+        """@指定用户（open_id / user_id）"""
+        return f"<at id={user_id}></at>"
+
+    @staticmethod
+    def md_at_all() -> str:
+        """@所有人（需群主开启权限）"""
+        return "<at id=all></at>"
+
+    @staticmethod
+    def md_link(text: str, url: str) -> str:
+        """超链接 [text](url)"""
+        return f"[{text}]({url})"
+
+    @staticmethod
+    def md_code_inline(code: str) -> str:
+        """`行内代码`"""
+        return f"`{code}`"
+
+    @staticmethod
+    def md_code_block(code: str, lang: str = "") -> str:
+        """代码块，支持语法高亮（lang: python/json/sql/bash 等）"""
+        return f"```{lang}\n{code}\n```"
+
+    @staticmethod
+    def md_header(text: str, level: int = 1) -> str:
+        """标题，level 1-6"""
+        return f"{'#' * max(1, min(6, level))} {text}"
+
+    @staticmethod
+    def md_hr() -> str:
+        """分割线"""
+        return "\n---\n"
 
     # ━━ Bitable (多维表格) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
