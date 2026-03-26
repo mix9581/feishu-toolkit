@@ -201,6 +201,214 @@ class FeishuClient:
             raise FeishuAPIError(data.get("code", -1), data.get("msg", "Upload failed"))
         return data["data"]["image_key"]
 
+    # ━━ File Upload ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def upload_file(self, file_path: str, file_type: str = "stream") -> str:
+        """
+        上传文件到飞书，返回 file_key。
+
+        Args:
+            file_path: 本地文件路径
+            file_type: 文件类型 — opus(音频), mp4(视频), pdf, doc, xls, ppt,
+                       stream(通用二进制，推荐用于 zip/mp3 等)
+        Returns:
+            file_key 字符串 (e.g. "file_v2_xxx")
+
+        注意:
+            - 最大 30MB
+            - 需要 im:resource 权限
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        with open(path, "rb") as f:
+            resp = requests.post(
+                f"{self.base_url}/im/v1/files",
+                headers={"Authorization": f"Bearer {self.token}"},
+                data={"file_type": file_type, "file_name": path.name},
+                files={"file": (path.name, f)},
+            )
+        data = resp.json()
+        if data.get("code") != 0:
+            raise FeishuAPIError(data.get("code", -1), data.get("msg", "Upload failed"))
+        return data["data"]["file_key"]
+
+    def send_file(self, receive_id: str, file_key: str,
+                  receive_id_type: str = "chat_id") -> dict:
+        """发送文件消息（file_key 通过 upload_file 获取）"""
+        return self._send_message(receive_id, "file", {"file_key": file_key}, receive_id_type)
+
+    # ━━ Drive: Folder Operations ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def get_root_folder_token(self) -> str:
+        """获取云盘根目录 token。"""
+        data = self._request("GET", "/drive/explorer/v2/root_folder/meta")
+        return data.get("data", {}).get("token", "")
+
+    def create_folder(self, name: str, parent_node: str) -> str:
+        """在云盘指定目录下创建文件夹，返回 folder token。"""
+        data = self._request(
+            "POST", "/drive/v1/files/create_folder",
+            json={"name": name, "folder_token": parent_node},
+        )
+        return data.get("data", {}).get("token", "")
+
+    def list_folder_children(self, folder_token: str,
+                              page_size: int = 50) -> list[dict]:
+        """列出文件夹下的文件/子文件夹。"""
+        data = self._request(
+            "GET",
+            f"/drive/v1/files?folder_token={folder_token}"
+            f"&page_size={page_size}",
+        )
+        return data.get("data", {}).get("files", [])
+
+    def find_or_create_folder(self, name: str, parent_node: str) -> str:
+        """查找或创建子文件夹，返回 folder token。"""
+        try:
+            children = self.list_folder_children(parent_node)
+            for child in children:
+                if child.get("name") == name and child.get("type") == "folder":
+                    return child.get("token", "")
+        except Exception:
+            pass
+        return self.create_folder(name, parent_node)
+
+    # ━━ Drive: Chunked File Upload ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def upload_file_to_drive(
+        self,
+        file_path: str,
+        parent_node: str,
+        file_name: str = "",
+        on_progress: callable = None,
+    ) -> str:
+        """
+        分片上传文件到飞书云盘，返回 file_token。
+
+        3 步流程:
+          1. upload_prepare — 获取 upload_id + block 数量
+          2. upload_part × N — 分片上传（每片 4MB）
+          3. upload_finish — 完成上传
+
+        Args:
+            file_path: 本地文件路径
+            parent_node: 父文件夹 token
+            file_name: 上传后的文件名（默认用原始文件名）
+            on_progress: 进度回调 fn(block_seq, block_num)
+
+        Returns:
+            file_token 字符串
+
+        权限要求: drive:drive 或 drive:file:upload
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        file_size = path.stat().st_size
+        upload_name = file_name or path.name
+
+        # Step 1: upload_prepare
+        prepare_data = self._request(
+            "POST", "/drive/v1/files/upload_prepare",
+            json={
+                "file_name": upload_name,
+                "parent_type": "explorer",
+                "parent_node": parent_node,
+                "size": file_size,
+            },
+        )
+        upload_id = prepare_data["data"]["upload_id"]
+        block_size = prepare_data["data"]["block_size"]
+        block_num = prepare_data["data"]["block_num"]
+
+        # Step 2: upload_part × N
+        with open(path, "rb") as f:
+            for seq in range(block_num):
+                chunk = f.read(block_size)
+                chunk_size = len(chunk)
+
+                # Calculate Adler-32 checksum
+                checksum = str(self._adler32(chunk))
+
+                resp = requests.post(
+                    f"{self.base_url}/drive/v1/files/upload_part",
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    data={
+                        "upload_id": upload_id,
+                        "seq": str(seq),
+                        "size": str(chunk_size),
+                        "checksum": checksum,
+                    },
+                    files={"file": ("blob", chunk)},
+                )
+                resp_data = resp.json()
+                if resp_data.get("code") != 0:
+                    raise FeishuAPIError(
+                        resp_data.get("code", -1),
+                        resp_data.get("msg", f"Upload part {seq} failed"),
+                    )
+
+                if on_progress:
+                    on_progress(seq + 1, block_num)
+
+        # Step 3: upload_finish
+        finish_data = self._request(
+            "POST", "/drive/v1/files/upload_finish",
+            json={
+                "upload_id": upload_id,
+                "block_num": block_num,
+            },
+        )
+        return finish_data["data"]["file_token"]
+
+    @staticmethod
+    def _adler32(data: bytes) -> int:
+        """计算 Adler-32 校验和。"""
+        import zlib
+        return zlib.adler32(data) & 0xffffffff
+
+    # ━━ Drive: Permissions & Sharing ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def set_drive_public_permission(
+        self,
+        file_token: str,
+        file_type: str = "file",
+        link_share_entity: str = "tenant_readable",
+    ) -> dict:
+        """
+        设置云盘文件/文件夹的公共分享权限。
+
+        Args:
+            file_token: 文件 token
+            file_type: 文件类型 (file/doc/docx/sheet/bitable/folder)
+            link_share_entity: 链接分享范围
+                - tenant_readable: 组织内获得链接的人可阅读
+                - tenant_editable: 组织内获得链接的人可编辑
+                - anyone_readable: 互联网上获得链接的人可阅读
+                - anyone_editable: 互联网上获得链接的人可编辑
+
+        Returns:
+            API 响应
+        """
+        return self._request(
+            "PATCH",
+            f"/drive/v1/permissions/{file_token}/public"
+            f"?type={file_type}",
+            json={
+                "external_access_entity": "open",
+                "security_entity": "anyone_can_view",
+                "comment_entity": "anyone_can_view",
+                "share_entity": "anyone",
+                "link_share_entity": link_share_entity,
+            },
+        )
+
+    def get_drive_file_url(self, file_token: str) -> str:
+        """构建云盘文件的访问 URL。"""
+        return f"https://feishu.cn/file/{file_token}"
+
     # ━━ Contact / User ID Lookup ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     def get_user_ids(self, emails: list[str] = None, mobiles: list[str] = None) -> list[dict]:
@@ -274,14 +482,18 @@ class FeishuClient:
     def create_document_with_content(self, title: str, blocks: list[dict],
                                      folder_token: str = None) -> dict:
         """
-        创建文档并写入内容（一步到位）。
+        创建文档并写入内容（自动分批写入）。
         返回: {"document_id": "xxx", "url": "https://xxx.feishu.cn/docx/xxx"}
         """
         doc = self.create_document(title, folder_token)
         doc_id = doc["document_id"]
         root_block = self.get_document_root_block(doc_id)
         if blocks:
-            self.add_document_blocks(doc_id, root_block, blocks)
+            # 飞书 API 每次最多写入 50 个 block，分批写入
+            batch_size = 50
+            for i in range(0, len(blocks), batch_size):
+                batch = blocks[i:i + batch_size]
+                self.add_document_blocks(doc_id, root_block, batch)
         return {
             "document_id": doc_id,
             "url": f"https://feishu.cn/docx/{doc_id}",
@@ -431,17 +643,17 @@ class FeishuClient:
         }
 
     @staticmethod
-    def code_block(code: str, language: int = 49) -> dict:
+    def code_block(code: str, language: int = None) -> dict:
         """
-        代码块。language 常用值:
-        0=PlainText, 12=Go, 14=Java, 18=JavaScript, 33=Markdown,
-        49=Python, 56=Rust, 62=SQL, 68=TypeScript, 73=YAML
+        代码块。
+
+        注意: 创建 block 时不可带 style.language 字段（API 会报 field validation failed），
+        language 仅用于读取时识别。创建时默认为 PlainText。
         """
         return {
             "block_type": 14,
             "code": {
                 "elements": [{"text_run": {"content": code}}],
-                "style": {"language": language},
             },
         }
 
@@ -472,7 +684,7 @@ class FeishuClient:
     @staticmethod
     def divider_block() -> dict:
         """分割线"""
-        return {"block_type": 22}
+        return {"block_type": 22, "divider": {}}
 
     # ━━ Card Builders ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
