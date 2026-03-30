@@ -46,9 +46,11 @@
 
 | 类别 | 能力 |
 |------|------|
-| **消息** | 文本、富文本（@用户/图片/链接/表情）、图片、交互卡片 |
+| **消息** | 文本、富文本（@用户/图片/链接/表情）、图片、文件、交互卡片 |
 | **图片** | 上传图片、获取 image_key |
-| **文档** | 创建文档、写入 Block（标题/段落/列表/代码块/引用/分割线） |
+| **文件** | IM 文件上传（≤30MB）、Drive 分片上传（无大小限制） |
+| **云盘** | 文件夹管理、分片上传、权限设置、分享链接 |
+| **文档** | 创建文档、写入 Block（标题/段落/列表/代码块/引用/分割线，自动分批） |
 | **知识库** | 列出知识空间、在知识库中创建文档、云文档移入知识库 |
 | **多维表格** | 创建表格、批量创建记录、搜索记录 |
 | **通讯录** | 邮箱/手机号 → open_id 查询 |
@@ -128,6 +130,56 @@ client.send_rich_text("oc_xxx", "周报通知", [
 image_key = client.upload_image("./chart.png")
 client.send_image("oc_xxx", image_key)
 ```
+
+#### 上传文件并发送
+
+```python
+# 小文件 (≤30MB): IM 直接上传
+file_key = client.upload_file("./report.pdf")
+client.send_file("oc_xxx", file_key)
+```
+
+#### 大文件上传到云盘（Drive 分片上传）
+
+飞书 IM 文件上传限制 30MB，超过需要用 **Drive 分片上传**。本工具封装了完整的 3 步流程：
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  1. prepare  │ →  │ 2. part × N │ →  │  3. finish   │
+│  获取 upload │    │  每片 4MB    │    │  返回 token  │
+│  _id + 分片数│    │  带 Adler32  │    │              │
+└─────────────┘    └─────────────┘    └─────────────┘
+```
+
+```python
+# 大文件 (>30MB): Drive 分片上传
+folder_token = client.get_root_folder_token()
+music_folder = client.find_or_create_folder("Music", folder_token)
+
+file_token = client.upload_file_to_drive(
+    "./songs.zip",                    # 本地文���路径
+    parent_node=music_folder,         # 目标文件夹 token
+    on_progress=lambda seq, total: print(f"[{seq}/{total}]"),
+)
+
+# 设置分享权限
+client.set_drive_public_permission(file_token)
+print(f"下载链接: https://feishu.cn/file/{file_token}")
+```
+
+**为什么要打包成 zip？**
+
+AI Agent 调用工具时，常见的错误做法是逐个上传文件（比如 20 首歌 → 20 次 IM 上传），导致：
+- 每个文件都要单独调用一次 API，效率极低
+- IM 上传有 30MB 限制，大文件直接失败
+- 群里收到 20 条文件消息，体验很差
+
+正确做法（本工具的 `music-toolkit` 中已实现）：
+1. **打包**: 所有文件压缩成 1 个 zip
+2. **智能路由**: zip ≤30MB → IM 直接发送；zip >30MB → Drive 分片上传
+3. **分享**: 设置组织内可读权限，发送含下载链接的卡片消息
+
+这样无论歌单有多少首歌、文件多大，用户只收到 1 条消息，点击即可下载完整压缩包。
 
 #### 创建飞书文档（云空间）
 
@@ -426,8 +478,10 @@ cp -r skill/ ~/.cursor/skills/feishu-integration/
 | `send_text(id, text)` | 发送纯文本消息 |
 | `send_rich_text(id, title, content)` | 发送富文本消息（@用户/图片/链接） |
 | `send_image(id, image_key)` | 发送图片消息 |
+| `send_file(id, file_key)` | 发送文件消息 |
 | `send_card(id, card)` | 发送交互卡片 |
 | `upload_image(path)` | 上传图片，返回 image_key |
+| `upload_file(path, file_type)` | 上传文件（≤30MB），返回 file_key |
 
 ### 用户 & 群组
 
@@ -444,6 +498,18 @@ cp -r skill/ ~/.cursor/skills/feishu-integration/
 | `create_document(title)` | 创建空文档 |
 | `create_document_with_content(title, blocks)` | 创建文档并写入内容 |
 | `add_document_blocks(doc_id, parent_id, blocks)` | 向文档追加 Block |
+
+### 云盘（Drive）
+
+| 方法 | 说明 |
+|------|------|
+| `get_root_folder_token()` | 获取云盘根目录 token |
+| `create_folder(name, parent_node)` | 创建文件夹 |
+| `list_folder_children(folder_token)` | 列出文件夹内容 |
+| `find_or_create_folder(name, parent)` | 查找或创建子文件夹 |
+| `upload_file_to_drive(path, parent, name, on_progress)` | 分片上传（3 步：prepare → part × N → finish） |
+| `set_drive_public_permission(token, type, share)` | 设置分享权限 |
+| `get_drive_file_url(file_token)` | 构建文件访问 URL |
 
 ### 知识库（Wiki）
 
