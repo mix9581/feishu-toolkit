@@ -446,6 +446,28 @@ curl -fsSL https://raw.githubusercontent.com/mix9581/feishu-toolkit/main/install
 
 安装后重启 Claude Code / Cursor，AI 会自动识别何时使用本工具发送飞书消息或操作知识库。
 
+### 配合 Music Toolkit 使用
+
+[music-toolkit](https://github.com/mix9581/music-toolkit) 使用本工具实现音乐文件推送和歌词文档创建：
+
+```bash
+# 安装 music-toolkit
+git clone https://github.com/mix9581/music-toolkit.git ~/music-toolkit
+
+# 下载歌单 → 打包发群 → 创建歌词文档（一条命令）
+python3 ~/music-toolkit/music_toolkit.py download-playlist 9582035807 qq \
+  --send-chat oc_xxx --lyrics-doc
+```
+
+music-toolkit 依赖本工具的能力：
+
+| 场景 | 使用的 feishu-toolkit API |
+|------|--------------------------|
+| 推送歌曲卡片 | `build_card` + `card_fields` + `card_markdown` + `send_card` |
+| 发送歌曲文件 | `upload_file` (≤30MB) 或 `upload_file_to_drive` (>30MB) |
+| 创建歌词文档 | `create_document_with_content` + `heading_block` + `code_block` |
+| 设置分享权限 | `set_drive_public_permission` |
+
 ### 配合官方 MCP 使用（推荐）
 
 ```json
