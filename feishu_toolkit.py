@@ -972,6 +972,9 @@ class FeishuClient:
         """
         创建多维表格并定义字段，返回 (app_token, table_id, url)。
 
+        通过 create table API 直接创建带自定义字段的表，
+        然后删除默认的空"数据表"，避免出现多余的默认列和空行。
+
         Args:
             name: 表格名称
             fields: 字段列表 [(字段名, 类型), ...]  类型: 1=文本, 2=数字, 5=日期, 15=超链接
@@ -980,14 +983,37 @@ class FeishuClient:
         Returns:
             (app_token, table_id, url) 三元组
         """
+        # 1. 创建 bitable app（会附带一个默认空表）
         result = self.create_bitable(name, folder_token=folder_token)
         app_data = result.get("data", {}).get("app", {})
         app_token = app_data.get("app_token", "")
-        table_id = app_data.get("default_table_id", "")
+        default_table_id = app_data.get("default_table_id", "")
         url = app_data.get("url", "")
 
-        for field_name, field_type in fields:
-            self.add_bitable_field(app_token, table_id, field_name, field_type)
+        # 2. 创建自定义表（带完整字段定义，首列即第一个字段）
+        field_defs = [{"field_name": fn, "type": ft} for fn, ft in fields]
+        table_result = self._request(
+            "POST",
+            f"/bitable/v1/apps/{app_token}/tables",
+            json={
+                "table": {
+                    "name": name,
+                    "default_view_name": "数据视图",
+                    "fields": field_defs,
+                }
+            },
+        )
+        table_id = table_result.get("data", {}).get("table_id", "")
+
+        # 3. 删除默认空表（避免用户看到多余的空白表）
+        if default_table_id and table_id:
+            try:
+                self._request(
+                    "DELETE",
+                    f"/bitable/v1/apps/{app_token}/tables/{default_table_id}",
+                )
+            except Exception:
+                pass  # 删不掉也没关系，不影响功能
 
         return app_token, table_id, url
 
