@@ -943,6 +943,54 @@ class FeishuClient:
         data = self._request("GET", f"/bitable/v1/apps/{app_token}/tables")
         return data.get("data", {}).get("items", [])
 
+    def add_bitable_field(self, app_token: str, table_id: str,
+                          field_name: str, field_type: int = 1) -> dict:
+        """
+        添加多维表格字段（列定义）。
+
+        Args:
+            app_token: 多维表格 app_token
+            table_id: 数据表 ID
+            field_name: 字段名
+            field_type: 字段类型 (1=文本, 2=数字, 3=单选, 5=日期, 15=超链接)
+
+        Returns:
+            API 响应（含 field_id）
+        """
+        return self._request(
+            "POST",
+            f"/bitable/v1/apps/{app_token}/tables/{table_id}/fields",
+            json={"field_name": field_name, "type": field_type},
+        )
+
+    def create_bitable_with_fields(
+        self,
+        name: str,
+        fields: list[tuple[str, int]],
+        folder_token: str = None,
+    ) -> tuple[str, str, str]:
+        """
+        创建多维表格并定义字段，返回 (app_token, table_id, url)。
+
+        Args:
+            name: 表格名称
+            fields: 字段列表 [(字段名, 类型), ...]  类型: 1=文本, 2=数字, 5=日期, 15=超链接
+            folder_token: 可选，父文件夹 token
+
+        Returns:
+            (app_token, table_id, url) 三元组
+        """
+        result = self.create_bitable(name, folder_token=folder_token)
+        app_data = result.get("data", {}).get("app", {})
+        app_token = app_data.get("app_token", "")
+        table_id = app_data.get("default_table_id", "")
+        url = app_data.get("url", "")
+
+        for field_name, field_type in fields:
+            self.add_bitable_field(app_token, table_id, field_name, field_type)
+
+        return app_token, table_id, url
+
     def create_bitable_records(self, app_token: str, table_id: str,
                                records: list[dict]) -> dict:
         """
