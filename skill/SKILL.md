@@ -91,6 +91,44 @@ result = client.create_document_with_content("周报: 音乐数据分析", [
 print(f"文档地址: {result['url']}")
 ```
 
+## music-toolkit 联动说明
+
+**当 AI 需要把音乐数据发送到飞书群时，应使用 music-toolkit 的内置推送命令，而不是直接调用本 feishu-toolkit。**
+
+### 调用链
+
+```
+music_toolkit.py  push-playlist-detail / push-song / push-search / download-playlist
+        ↓  (FeishuPusher 动态导入)
+feishu_toolkit.FeishuClient  ← 你现在看的这个文件
+        ↓
+飞书 Open API
+```
+
+### 典型场景
+
+| 用户请求 | 正确做法 |
+|---------|---------|
+| 把汽水歌单数据推送到飞书 | `cd music-toolkit && python music_toolkit.py push-playlist-detail "<url>" --sort likes` |
+| 下载歌单并发文件到群 | `python music_toolkit.py download-playlist <id> <source> --send-chat oc_xxx` |
+| 搜索歌曲并推送卡片 | `python music_toolkit.py push-search "晴天"` |
+| 把音乐数据以卡片发到群 | 先用 music-toolkit 的 push-* 命令，它内部会自动调用 feishu-toolkit |
+
+### 直接使用 feishu-toolkit 的场景
+
+以下场景直接使用本 feishu-toolkit，不需要经过 music-toolkit：
+- 发送图片、富文本消息（含 @用户）
+- 创建飞书文档（非音乐类内容）
+- 操作多维表格
+- 通讯录查询
+
+### feishu-toolkit 安装位置
+
+music-toolkit 默认在以下路径寻找 feishu-toolkit（按优先级）：
+1. 环境变量 `FEISHU_TOOLKIT_PATH`
+2. `../feishu-toolkit/`（同级目录，推荐）
+3. `~/claude-workspaces/feishu-toolkit/`
+
 ## 详细参考
 
 - 完整消息格式: [references/message-formats.md](references/message-formats.md)
