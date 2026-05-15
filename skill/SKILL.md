@@ -29,7 +29,7 @@ description: >
 pip install requests
 export FEISHU_APP_ID="cli_xxx"
 export FEISHU_APP_SECRET="xxx"
-python scripts/feishu_toolkit.py auth
+feishu-toolkit auth
 ```
 
 ## 核心用法
